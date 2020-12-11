@@ -1,26 +1,30 @@
 # noinspection PyUnresolvedReferences
+import inspect
 import logging
 import os
 from optparse import OptionParser
 
 from panwid.datatable import *
 from panwid.listbox import ScrollingListBox
-from urwid_utils.palette import *
+from urwid_utils import PaletteEntry, Palette
+import urwid
 
 from environmentindex import build__environment__version, \
     build__version__commit
 from gitradartablebox import GitRadarTableBox
 from stages import stage_names, stage_shortnames
+from utils import run_cmd
 from workspaceindex import analyze_changes
 
 
-def init_settings(main_branch='', dev_branch=''):
+def init_settings(main_branch='', dev_branches=''):
     if main_branch == '':
         main_branch = 'master'
-    if dev_branch == '':
-        dev_branch = 'dev'
+    if dev_branches == '':
+        branches = run_cmd('git branch -l --color=never', inspect.stack()[0][0].f_code.co_name)
+        dev_branches = branches
 
-    return main_branch, dev_branch, stage_names, stage_shortnames
+    return main_branch, dev_branches, stage_names, stage_shortnames
 
 
 def shorten_env_name(name):
@@ -71,8 +75,11 @@ def invert_dict(x):
 
 def main():
     os.system('echo "Running git fetch" && git fetch')
-    os.system('echo "Running git fetcth upstream" && git fetch upstream')
-    logger = logging.getLogger(__name__)
+    ret = os.system('echo "Running git fetch upstream" && git fetch upstream')
+    if ret != 0:
+        raise Exception('This tool supports only Git fork model where you have upstream remote.')
+
+    log = logging.getLogger(__name__)
     parser = OptionParser()
     parser.add_option("-d", "--dir", dest="dir", help="git repo dir",
                       metavar="DIR")
@@ -85,10 +92,10 @@ def main():
     envs = options.environments if options.environments is not None else []
 
     model = init_settings()
-    main_branch, dev_branch, stage_names, stage_shortnames = model
+    main_branch, dev_branches, stage_names, stage_shortnames = model
     stage_names, stage_data, filepaths = analyze_changes(main_branch,
-                                                         dev_branch,
-                                                         stage_names)
+                                                         dev_branches,
+                                                         stage_names, None, None, log)
 
     def map_version_to_tag(version):
         if version.startswith('v'):
@@ -130,12 +137,12 @@ def main():
         # fh.setLevel(logging.DEBUG)
         fh.setFormatter(formatter)
         if options.verbose > 1:
-            logger.setLevel(logging.DEBUG)
+            log.setLevel(logging.DEBUG)
             logging.getLogger("panwid.datatable").setLevel(logging.DEBUG)
         else:
-            logger.setLevel(logging.INFO)
+            log.setLevel(logging.WARNING)
             logging.getLogger("panwid.datatable").setLevel(logging.INFO)
-        logger.addHandler(fh)
+        log.addHandler(fh)
         logging.getLogger("panwid.datatable").addHandler(fh)
         # logging.getLogger("raccoon.dataframe").setLevel(logging.DEBUG)
         # logging.getLogger("raccoon.dataframe").addHandler(fh)
@@ -152,11 +159,11 @@ def main():
     # screen.set_terminal_properties(1<<24)
     screen.set_terminal_properties(256)
 
-    NORMAL_FG_MONO = "white"
-    NORMAL_FG_16 = "light gray"
-    NORMAL_BG_16 = "black"
-    NORMAL_FG_256 = "light gray"
-    NORMAL_BG_256 = "g0"
+    # NORMAL_FG_MONO = "white"
+    # NORMAL_FG_16 = "light gray"
+    # NORMAL_BG_16 = "black"
+    # NORMAL_FG_256 = "light gray"
+    # NORMAL_BG_256 = "g0"
 
     def env_matcher(stage):
         return get_possible_matching_envs(environment__version,
@@ -215,8 +222,7 @@ def main():
             padding=1),  # margin=5),
         DataTableColumn(
             "in_last_production_release",
-            label=stage_shortnames[
-                      'in_last_production_release'] + ' ' + last_prod_version + e2,
+            label=stage_shortnames['in_last_production_release'] + ' ' + last_prod_version + e2,
             width=10,
             align="right",
             sort_reverse=True,
@@ -225,7 +231,8 @@ def main():
         DataTableColumn(
             "in_previous_production_release",
             label=stage_shortnames[
-                      'in_previous_production_release'] + ' ' + prev_prod_version + e1,
+                      'in_previous_production_release'] + ' ' + prev_prod_version +
+                  e1,
             width=10,
             align="right",
             sort_reverse=True,
@@ -249,8 +256,8 @@ def main():
             ]))
 
     grtb = GitRadarTableBox(
+        log,
         COLUMNS,
-        logger,
         model,
         33,
         index="uniqueid",
@@ -275,7 +282,6 @@ def main():
     undef[0] = 'undefined'
     undef[3] = 'undefined'
     undef[4] = 'undefined'
-    
     # Outcommenting tty_signal_keys call that fails with recent Python 3.8 urwid-2.1.1
     #     TypeError: tcsetattr: elements of attributes must be characters or integers
     #
